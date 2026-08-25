@@ -219,6 +219,24 @@ fn handle_sidecar_message(
     }
 }
 
+/// The name the operating system shows for this process — on macOS, the
+/// application menu at the top left, next to the Apple logo.
+///
+/// Baked at compile time from `productName` in tauri.conf.json, which for a
+/// shell that is meant to host somebody else's application is the wrong
+/// answer: it says "Tauri Shell" while the windows say whatever the app named
+/// them. Tauri exposes the package info mutably before the app is built, and
+/// `Menu::default` reads the name from there, so the host can correct it.
+fn app_name() -> Option<String> {
+    let configured = std::env::var("TAURI_SHELL_APP_NAME").unwrap_or_default();
+    let configured = configured.trim();
+    if configured.is_empty() {
+        None
+    } else {
+        Some(configured.to_string())
+    }
+}
+
 /// The URI scheme the frontend is served under, and therefore the page's
 /// origin.
 ///
@@ -458,7 +476,14 @@ fn main() {
             spawn_sidecar(app.handle().clone(), alive_for_setup)?;
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build({
+            let mut context = tauri::generate_context!();
+            if let Some(name) = app_name() {
+                println!("[shell] presenting as '{name}'");
+                context.package_info_mut().name = name;
+            }
+            context
+        })
         .expect("error while building tauri application");
 
     app.run(move |_handle, event| {

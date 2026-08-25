@@ -25,9 +25,18 @@ TAURI_SHELL_SIDECAR_ENTRY=path/to/dist/sidecar/index.js \
 | `TAURI_SHELL_SIDECAR_ENTRY` | `../dist/sidecar/index.js`, then exe-relative | the sidecar's entry point |
 | `TAURI_SHELL_SIDECAR_NODE` | `node` | the node binary to spawn it with |
 | `TAURI_SHELL_SCHEME` | `app` | the scheme the frontend is served under |
+| `TAURI_SHELL_APP_NAME` | `Tauri Shell` | the name the OS shows for the process |
 
 The sidecar is spawned with `TAURI_SHELL=1` in its environment, so it can tell
 it is running under this shell rather than under Electron.
+
+`TAURI_SHELL_APP_NAME` is the one the operating system shows rather than the
+one a window carries: on macOS it is the application menu at the top left, next
+to the Apple logo, which `tauri_build` otherwise bakes from `productName` — so
+an unset shell announces itself as "Tauri Shell" while its windows are titled
+whatever the host asked for. Tauri exposes the package info mutably before the
+app is built and its default menu reads the name from there, so the host can
+correct it. Set it to the name of the application you are hosting.
 
 The scheme is configurable because it *is* the page's origin: it decides what
 CSP `'self'` resolves to and what origin-scoped storage is keyed by, so an
