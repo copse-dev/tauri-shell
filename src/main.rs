@@ -7,7 +7,7 @@
 // for the protocol.
 //
 // Nothing about the hosted app is compiled in. The frontend is read off disk
-// at runtime through a registered `copse://` scheme rather than baked into the
+// at runtime through a registered URI scheme rather than baked into the
 // binary by `tauri_build`, which is what lets one published binary serve any
 // app — and what lets this repository build it, on free public-runner minutes,
 // for a private repository to consume.
@@ -29,7 +29,7 @@ type ServoRuntime = tauri_runtime_servo::Servo<tauri::EventLoopMessage>;
 
 /// Prefix marking protocol lines on the sidecar's stdout; everything else is
 /// passed through as sidecar logging.
-const PREFIX: &str = "@copse-tauri ";
+const PREFIX: &str = "@tauri-shell ";
 
 #[derive(Deserialize)]
 #[serde(tag = "op")]
@@ -71,7 +71,7 @@ fn parse_hex_color(value: &str) -> Option<Color> {
 }
 
 fn window_label(win_id: u64) -> String {
-    format!("copse-{win_id}")
+    format!("win-{win_id}")
 }
 
 fn send_window_event(stdin: &SharedStdin, win_id: u64, event: &str) {
@@ -96,12 +96,12 @@ fn create_window(
     show: Option<bool>,
     background_color: Option<String>,
 ) {
-    // `copse://localhost/<url>` rather than WebviewUrl::App: App resolves
+    // `<scheme>://localhost/<url>` rather than WebviewUrl::App: App resolves
     // against the store `tauri_build` embeds at compile time, which is exactly
     // the coupling this binary exists to avoid. The sidecar still sends the
     // same relative URL it always did — `index.html?winId=1&...` — so the
     // protocol is unchanged.
-    let app_url: tauri::Url = match format!("copse://localhost/{url}").parse() {
+    let app_url: tauri::Url = match format!("{}://localhost/{url}", scheme()).parse() {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("[shell] window {win_id} has an unusable url '{url}': {error}");
@@ -113,7 +113,7 @@ fn create_window(
         window_label(win_id),
         WebviewUrl::CustomProtocol(app_url),
     )
-    .title(title.unwrap_or_else(|| "Copse".to_string()))
+    .title(title.unwrap_or_else(|| "App".to_string()))
     .inner_size(width.unwrap_or(1200.0), height.unwrap_or(800.0))
     // The sidecar mirrors Electron's hidden-then-show pattern, but an
     // unmapped GTK window has no X11 handle yet and Servo needs one to
@@ -219,15 +219,44 @@ fn handle_sidecar_message(
     }
 }
 
-/// The directory the `copse://` scheme serves.
+/// The URI scheme the frontend is served under, and therefore the page's
+/// origin.
 ///
-/// `COPSE_FRONTEND_DIR` when set; otherwise `dist/renderer` relative to the
+/// A runtime parameter because the origin is the host application's business:
+/// it is what CSP `'self'` resolves to and what any origin-scoped storage is
+/// keyed by, so an app that wants its own should have it. Validated rather
+/// than trusted — a scheme with a `:` or a slash in it would silently produce
+/// a URL that resolves somewhere else entirely.
+fn scheme() -> String {
+    let configured = std::env::var("TAURI_SHELL_SCHEME").unwrap_or_default();
+    let configured = configured.trim();
+    if configured.is_empty() {
+        return "app".to_string();
+    }
+    let valid = configured
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic())
+        && configured
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
+    if valid {
+        configured.to_string()
+    } else {
+        eprintln!("[shell] ignoring unusable TAURI_SHELL_SCHEME '{configured}'; using 'app'");
+        "app".to_string()
+    }
+}
+
+/// The directory the configured scheme serves.
+///
+/// `TAURI_SHELL_FRONTEND_DIR` when set; otherwise `dist/renderer` relative to the
 /// working directory, which is the layout the sidecar's own build produces.
 /// Deliberately not fatal when missing: the shell still starts, every request
 /// 404s, and the log says which directory it looked in — which is a far
 /// clearer failure than a blank window.
 fn frontend_dir() -> PathBuf {
-    if let Ok(explicit) = std::env::var("COPSE_FRONTEND_DIR") {
+    if let Ok(explicit) = std::env::var("TAURI_SHELL_FRONTEND_DIR") {
         return PathBuf::from(explicit);
     }
     PathBuf::from("dist/renderer")
@@ -251,7 +280,7 @@ fn content_type_for(path: &str) -> &'static str {
     }
 }
 
-/// The path a `copse://localhost/<path>?<query>` request asks for, rejected if
+/// The path a `<scheme>://localhost/<path>?<query>` request asks for, rejected if
 /// it tries to climb out of the frontend directory.
 ///
 /// The scheme is same-origin to the page, so anything the page can reach can
@@ -273,18 +302,18 @@ fn request_path(uri: &str) -> Option<String> {
 
 /// Locate `dist/sidecar/index.js`.
 ///
-/// `COPSE_SIDECAR_ENTRY` wins when set. Otherwise: the historical default is
+/// `TAURI_SHELL_SIDECAR_ENTRY` wins when set. Otherwise: the historical default is
 /// `../dist/sidecar/index.js`, which is *cwd*-relative and so only resolves
 /// when the shell is started from inside `tauri-shell/` — which `cargo run`
 /// does and a perf harness invoking the release binary by path does not. The
 /// failure is a bare Node MODULE_NOT_FOUND naming a path nobody wrote, so try
 /// the exe-relative location too and, when neither exists, say what was tried.
 fn sidecar_entry() -> std::io::Result<PathBuf> {
-    if let Ok(explicit) = std::env::var("COPSE_SIDECAR_ENTRY") {
+    if let Ok(explicit) = std::env::var("TAURI_SHELL_SIDECAR_ENTRY") {
         return Ok(PathBuf::from(explicit));
     }
     let mut candidates = vec![PathBuf::from("../dist/sidecar/index.js")];
-    // target/release/copse-tauri-shell → up three to the repo root.
+    // target/release/tauri-shell → up three to the repo root.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(root) = exe
             .parent()
@@ -303,7 +332,7 @@ fn sidecar_entry() -> std::io::Result<PathBuf> {
         std::io::ErrorKind::NotFound,
         format!(
             "no dist/sidecar/index.js (tried {}) — run `pnpm build && pnpm build:tauri`, \
-             or point COPSE_SIDECAR_ENTRY at it",
+             or point TAURI_SHELL_SIDECAR_ENTRY at it",
             candidates
                 .iter()
                 .map(|path| path.display().to_string())
@@ -313,12 +342,23 @@ fn sidecar_entry() -> std::io::Result<PathBuf> {
     ))
 }
 
+/// How long to wait for the sidecar's first `create-window` before assuming
+/// the two ends disagree.
+///
+/// The failure this catches is silent by construction: the sidecar decides
+/// whether a shell is attached by looking for `TAURI_SHELL=1`, and reads
+/// protocol lines by their prefix. Get either wrong — an old sidecar, a
+/// renamed variable — and it simply never asks for a window. Nothing errors;
+/// there is just no application. Worth a line in the log rather than a
+/// mystery.
+const FIRST_WINDOW_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+
 fn spawn_sidecar(handle: AppHandle<ServoRuntime>, alive: Arc<AtomicBool>) -> std::io::Result<()> {
-    let node = std::env::var("COPSE_SIDECAR_NODE").unwrap_or_else(|_| "node".to_string());
+    let node = std::env::var("TAURI_SHELL_SIDECAR_NODE").unwrap_or_else(|_| "node".to_string());
     let entry = sidecar_entry()?;
     let mut child = Command::new(node)
         .arg(entry)
-        .env("COPSE_TAURI_SHELL", "1")
+        .env("TAURI_SHELL", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
@@ -327,6 +367,20 @@ fn spawn_sidecar(handle: AppHandle<ServoRuntime>, alive: Arc<AtomicBool>) -> std
         child.stdin.take().expect("sidecar stdin is piped"),
     ));
     let stdout = child.stdout.take().expect("sidecar stdout is piped");
+
+    let asked_for_a_window = Arc::new(AtomicBool::new(false));
+    let watchdog = asked_for_a_window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(FIRST_WINDOW_GRACE);
+        if !watchdog.load(Ordering::SeqCst) {
+            eprintln!(
+                "[shell] the sidecar has not asked for a window in {}s. It may not \
+                 have recognised this shell: it looks for TAURI_SHELL=1 in its \
+                 environment and for protocol lines prefixed '{PREFIX}'.",
+                FIRST_WINDOW_GRACE.as_secs()
+            );
+        }
+    });
 
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
@@ -337,7 +391,12 @@ fn spawn_sidecar(handle: AppHandle<ServoRuntime>, alive: Arc<AtomicBool>) -> std
                 continue;
             };
             match serde_json::from_str::<SidecarMessage>(payload) {
-                Ok(message) => handle_sidecar_message(&handle, &stdin, message),
+                Ok(message) => {
+                    if matches!(message, SidecarMessage::CreateWindow { .. }) {
+                        asked_for_a_window.store(true, Ordering::SeqCst);
+                    }
+                    handle_sidecar_message(&handle, &stdin, message)
+                }
                 Err(error) => eprintln!("[shell] bad sidecar message: {error}: {payload}"),
             }
         }
@@ -356,7 +415,11 @@ fn main() {
     let alive_for_setup = sidecar_alive.clone();
 
     let root = frontend_dir();
-    println!("[shell] serving copse://localhost/ from {}", root.display());
+    let scheme = scheme();
+    println!(
+        "[shell] serving {scheme}://localhost/ from {}",
+        root.display()
+    );
 
     let app = tauri::Builder::<ServoRuntime>::new()
         // Servo cannot read custom protocol request bodies; route Tauri's own
@@ -368,7 +431,7 @@ fn main() {
         // and counts as potentially trustworthy on the patched engine, so the
         // page keeps CSP 'self' and the secure-context APIs it would have had
         // on tauri://localhost.
-        .register_uri_scheme_protocol("copse", move |_ctx, request| {
+        .register_uri_scheme_protocol(scheme, move |_ctx, request| {
             let uri = request.uri().to_string();
             let Some(path) = request_path(&uri) else {
                 eprintln!("[shell] refused traversal in {uri}");

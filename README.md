@@ -14,24 +14,31 @@ else as a download rather than a 20-minute compile.
 ## Using a release
 
 ```bash
-COPSE_FRONTEND_DIR=path/to/dist/renderer \
-COPSE_SIDECAR_ENTRY=path/to/dist/sidecar/index.js \
+TAURI_SHELL_FRONTEND_DIR=path/to/dist/renderer \
+TAURI_SHELL_SIDECAR_ENTRY=path/to/dist/sidecar/index.js \
   ./tauri-shell
 ```
 
 | variable | default | meaning |
 | -------- | ------- | ------- |
-| `COPSE_FRONTEND_DIR` | `dist/renderer` | directory served at `copse://localhost/` |
-| `COPSE_SIDECAR_ENTRY` | `../dist/sidecar/index.js`, then exe-relative | the sidecar's entry point |
-| `COPSE_SIDECAR_NODE` | `node` | the node binary to spawn it with |
+| `TAURI_SHELL_FRONTEND_DIR` | `dist/renderer` | directory served at `<scheme>://localhost/` |
+| `TAURI_SHELL_SIDECAR_ENTRY` | `../dist/sidecar/index.js`, then exe-relative | the sidecar's entry point |
+| `TAURI_SHELL_SIDECAR_NODE` | `node` | the node binary to spawn it with |
+| `TAURI_SHELL_SCHEME` | `app` | the scheme the frontend is served under |
 
-The sidecar is spawned with `COPSE_TAURI_SHELL=1` in its environment, so it
-can tell it is running under this shell rather than under Electron.
+The sidecar is spawned with `TAURI_SHELL=1` in its environment, so it can tell
+it is running under this shell rather than under Electron.
+
+The scheme is configurable because it *is* the page's origin: it decides what
+CSP `'self'` resolves to and what origin-scoped storage is keyed by, so an
+application that wants its own should have it. Anything that is not a legal
+scheme is refused with a log line rather than quietly producing a URL that
+resolves somewhere unexpected.
 
 ## The protocol
 
 Line-oriented JSON over the sidecar's stdio. Every protocol line is prefixed
-`@copse-tauri `; anything else on stdout is passed through as sidecar logging,
+`@tauri-shell `; anything else on stdout is passed through as sidecar logging,
 so a sidecar can print freely without corrupting the channel.
 
 **Sidecar → shell**
@@ -45,7 +52,7 @@ so a sidecar can print freely without corrupting the channel.
 // show | hide | focus | close | maximize | minimize
 ```
 
-`url` is resolved against `copse://localhost/`, so it is whatever path the
+`url` is resolved against `<scheme>://localhost/`, so it is whatever path the
 frontend directory holds, plus any query the sidecar wants the page to see.
 
 **Shell → sidecar**
@@ -62,19 +69,27 @@ business, arranged through the query string it puts in `url`.
 The shell exits when the sidecar's stdout closes. Windows closing does not end
 it: an app may legitimately have none for a while.
 
+Both ends of this are easy to get half-right, and the failure is silent — a
+sidecar that does not see `TAURI_SHELL=1`, or does not use the prefix above,
+simply never asks for a window, and you get a process that starts and shows
+nothing. So the shell says so if no `create-window` arrives within fifteen
+seconds.
+
 ## Why the frontend is served, not embedded
 
 `tauri_build` normally bakes `frontendDist` into the executable, which would
-tie every build to one application. Instead the shell registers a `copse://`
-URI scheme and serves the directory `COPSE_FRONTEND_DIR` names.
+tie every build to one application. Instead the shell registers a URI scheme
+at startup and serves the directory `TAURI_SHELL_FRONTEND_DIR` names.
 
 That is not merely equivalent to the embedded path, it is equivalent *in the
 ways that matter*: on the patched engine a registered custom scheme gets a
 tuple origin and counts as potentially trustworthy, so the page keeps CSP
 `'self'` and the secure-context APIs it would have had on `tauri://localhost`.
-Verified rather than assumed — a page served this way under an enforced
+Verified rather than assumed, and on schemes invented for the test rather than
+on `tauri://` itself: a page served this way under an enforced
 `default-src 'self'` loads its own subresources on the patched engine, and is
-blocked on a stock one.
+blocked on a stock one. The fix is a property of embedder-registered schemes
+as a class, which is what makes an arbitrary `TAURI_SHELL_SCHEME` safe.
 
 Path traversal is refused rather than normalised: a request naming `..` is a
 403 in the log, not a read of an arbitrary file.
