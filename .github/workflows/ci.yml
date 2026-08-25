@@ -1,0 +1,57 @@
+# Debug build of the shell, so a change here is known to compile before anyone
+# cuts a release from it.
+#
+# It compiles Servo, so it is not fast — about twenty minutes cold. That is
+# affordable precisely because this repository is public: standard runners are
+# free here, which is the reason the shell lives in its own public repository
+# rather than inside the private one that consumes it.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Servo's debug artifacts are enormous; hosted runners have neither the disk
+  # nor the time for full debuginfo, and this check does not need it.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_DEV_INCREMENTAL: false
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  build:
+    name: build the shell
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: install Servo build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libegl1-mesa-dev libfontconfig1-dev \
+            libfreetype6-dev libgtk-3-dev libharfbuzz-dev libwebkit2gtk-4.1-dev \
+            libx11-dev libxkbcommon-x11-dev lld
+          echo "RUSTFLAGS=-C link-arg=-fuse-ld=lld" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - run: cargo build
+      - name: report the binary size
+        run: ls -lh target/debug/tauri-shell

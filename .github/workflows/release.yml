@@ -1,0 +1,86 @@
+# Build the shell for every platform that consumes it and attach the binaries
+# to a GitHub Release.
+#
+# This is the artefact the whole arrangement exists for: a private repository
+# that would otherwise pay per minute to compile Servo downloads one of these
+# instead. Public runners are free, so the expensive half happens here.
+#
+# Release profile, deliberately — a debug shell links to well over 300 MB and
+# is not something to make anyone download, nor to measure performance with.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to create or update the release for (e.g. v0.1.0)
+        required: true
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_PROFILE_RELEASE_DEBUG: 0
+
+jobs:
+  build:
+    name: ${{ matrix.platform.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: linux-x86_64, os: ubuntu-latest }
+          - { name: macos-aarch64, os: macos-latest }
+    runs-on: ${{ matrix.platform.os }}
+    # Servo in release takes considerably longer than the ~20 minutes a debug
+    # build does, and a cold macOS runner is slower again.
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install Servo build dependencies (linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libegl1-mesa-dev libfontconfig1-dev \
+            libfreetype6-dev libgtk-3-dev libharfbuzz-dev libwebkit2gtk-4.1-dev \
+            libx11-dev libxkbcommon-x11-dev lld
+          echo "RUSTFLAGS=-C link-arg=-fuse-ld=lld" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+
+      - run: cargo build --release
+
+      - name: package
+        run: |
+          set -euo pipefail
+          name="tauri-shell-${{ matrix.platform.name }}"
+          strip target/release/tauri-shell || true
+          ls -lh target/release/tauri-shell
+          tar -czf "$name.tar.gz" -C target/release tauri-shell
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256" 2>/dev/null \
+            || shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          cat "$name.tar.gz.sha256"
+
+      # The consumer pins a release by tag and verifies the checksum, so both
+      # travel together.
+      - name: attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          name="tauri-shell-${{ matrix.platform.name }}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                 --title "$TAG" --notes "Prebuilt tauri-shell binaries."
+          gh release upload "$TAG" "$name.tar.gz" "$name.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY" --clobber

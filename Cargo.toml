@@ -1,0 +1,55 @@
+# The Tauri + Servo shell, as a standalone binary.
+#
+# It owns OS windows and nothing else: the application it hosts runs as a Node
+# sidecar it spawns, and the frontend it renders is read off disk at runtime.
+# Neither is compiled in, which is the point — one published binary serves any
+# app that speaks the stdio protocol in README.md.
+[package]
+name = "tauri-shell"
+version = "0.1.0"
+description = "A Tauri shell rendered by Servo that hosts a Node sidecar"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/copse-dev/tauri-shell"
+# Distributed as a release binary, not a crate.
+publish = false
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+tauri = { version = "2.11", default-features = false, features = [
+  "common-controls-v6",
+] }
+tauri-runtime-servo = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# On by default: the overrides below resolve to the patched engine, and
+# enabling this against a stock libservo is a compile error rather than a
+# silent no-op, because the pref it sets is a struct field only the patched
+# tree has. `--no-default-features` builds against stock published libservo.
+default = ["patched-servo"]
+patched-servo = ["tauri-runtime-servo/patched-servo"]
+
+# The patched engine, as `tauri-runtime-patches` branches on the org's forks.
+# This is the block tauri-runtime-servo's README publishes under "Using a
+# patched Servo"; its CI builds that recipe on every change, so keep the two in
+# step rather than improvising here.
+[patch.crates-io]
+servo = { git = "https://github.com/copse-dev/servo", rev = "3cb6867644a222d54dd5ed7fbd991cd5811fd2f4" }
+content-security-policy = { git = "https://github.com/copse-dev/rust-content-security-policy", rev = "fb5fd0f1af7f0c0dc315bf938507290b2e48cdbe" }
+
+# All eight stylo entries are required. Overriding `stylo` alone leaves the
+# others resolving from the registry, which puts a second copy of
+# `stylo_traits` and friends in the graph and fails to compile.
+selectors = { git = "https://github.com/copse-dev/stylo", rev = "4973e76a24701bdf68ef15cc6f493b0737f07f64" }
+servo_arc = { git = "https://github.com/copse-dev/stylo", rev = "4973e76a24701bdf68ef15cc6f493b0737f07f64" }
+stylo = { git = "https://github.com/copse-dev/stylo", rev = "4973e76a24701bdf68ef15cc6f493b0737f07f64" }
+stylo_atoms = { git = "https://github.com/copse-dev/stylo", rev = "4973e76a24701bdf68ef15cc6f493b0737f07f64" }
+stylo_dom = { git = "https://github.com/copse-dev/stylo", rev = "4973e76a24701bdf68ef15cc6f493b0737f07f64" }
+stylo_malloc_size_of = { git = "https://github.com/copse-dev/stylo", rev = "4973e76a24701bdf68ef15cc6f493b0737f07f64" }
+stylo_static_prefs = { git = "https://github.com/copse-dev/stylo", rev = "4973e76a24701bdf68ef15cc6f493b0737f07f64" }
+stylo_traits = { git = "https://github.com/copse-dev/stylo", rev = "4973e76a24701bdf68ef15cc6f493b0737f07f64" }
