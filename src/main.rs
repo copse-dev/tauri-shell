@@ -318,44 +318,36 @@ fn request_path(uri: &str) -> Option<String> {
     Some(path.to_string())
 }
 
-/// Locate `dist/sidecar/index.js`.
+/// Locate the sidecar's entry point.
 ///
-/// `TAURI_SHELL_SIDECAR_ENTRY` wins when set. Otherwise: the historical default is
-/// `../dist/sidecar/index.js`, which is *cwd*-relative and so only resolves
-/// when the shell is started from inside `tauri-shell/` — which `cargo run`
-/// does and a perf harness invoking the release binary by path does not. The
-/// failure is a bare Node MODULE_NOT_FOUND naming a path nobody wrote, so try
-/// the exe-relative location too and, when neither exists, say what was tried.
+/// `TAURI_SHELL_SIDECAR_ENTRY` wins when set, and a host that knows where its
+/// own build output went should set it. The fallback is `dist/sidecar/index.js`
+/// relative to the working directory, which pairs with the frontend's
+/// `dist/renderer` default rather than describing anyone's repository layout.
+///
+/// It used to guess at one — `../dist/sidecar/index.js`, plus a walk three
+/// parents up from the executable, both of which assumed the binary lived in
+/// `tauri-shell/target/release/` inside the application's own checkout. A
+/// downloaded binary lives in a cache directory, or inside an `.app` bundle,
+/// and those guesses resolve to paths nobody has ever had. Better to try the
+/// one honest default and say plainly what was missing.
 fn sidecar_entry() -> std::io::Result<PathBuf> {
     if let Ok(explicit) = std::env::var("TAURI_SHELL_SIDECAR_ENTRY") {
         return Ok(PathBuf::from(explicit));
     }
-    let mut candidates = vec![PathBuf::from("../dist/sidecar/index.js")];
-    // target/release/tauri-shell → up three to the repo root.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(root) = exe
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-        {
-            candidates.push(root.join("../dist/sidecar/index.js"));
-        }
-    }
-    for candidate in &candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
+    let default = PathBuf::from("dist/sidecar/index.js");
+    if default.exists() {
+        return Ok(default);
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::NotFound,
         format!(
-            "no dist/sidecar/index.js (tried {}) — run `pnpm build && pnpm build:tauri`, \
-             or point TAURI_SHELL_SIDECAR_ENTRY at it",
-            candidates
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "no sidecar entry point: {} does not exist relative to {}. \
+             Point TAURI_SHELL_SIDECAR_ENTRY at your bundled sidecar.",
+            default.display(),
+            std::env::current_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_else(|_| "the working directory".to_string()),
         ),
     ))
 }

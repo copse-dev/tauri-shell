@@ -22,7 +22,7 @@ TAURI_SHELL_SIDECAR_ENTRY=path/to/dist/sidecar/index.js \
 | variable | default | meaning |
 | -------- | ------- | ------- |
 | `TAURI_SHELL_FRONTEND_DIR` | `dist/renderer` | directory served at `<scheme>://localhost/` |
-| `TAURI_SHELL_SIDECAR_ENTRY` | `../dist/sidecar/index.js`, then exe-relative | the sidecar's entry point |
+| `TAURI_SHELL_SIDECAR_ENTRY` | `dist/sidecar/index.js` | the sidecar's entry point |
 | `TAURI_SHELL_SIDECAR_NODE` | `node` | the node binary to spawn it with |
 | `TAURI_SHELL_SCHEME` | `app` | the scheme the frontend is served under |
 | `TAURI_SHELL_APP_NAME` | `Tauri Shell` | tauri's default menu and Linux desktop integration |
